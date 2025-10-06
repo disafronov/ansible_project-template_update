@@ -1,0 +1,75 @@
+name: Refresh repos.list
+
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      # Hard-coded input per agreed minimal design
+      USERS: "disafronov"
+      PATTERN: "^disafronov/ansible_project-"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify template.repo
+        shell: bash
+        run: |
+          if [[ ! -s template.repo ]]; then
+            echo "template.repo not found or empty" >&2
+            exit 1
+          fi
+          if [[ $(wc -l < template.repo) -ne 1 ]]; then
+            echo "template.repo must contain exactly one line" >&2
+            exit 1
+          fi
+
+      - name: Build repos.list (own, non-fork, non-archived, incl. private)
+        env:
+          # Use PAT only for listing repositories (private access)
+          GH_TOKEN: ${{ secrets.REPO_UPDATE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp="$(mktemp)"; : > "$tmp"
+
+          # Collect user's repositories (type=owner), private included via ROLE_UPDATE_TOKEN
+          for user in $USERS; do
+            gh api -H "Accept: application/vnd.github+json" \
+              "/users/${user}/repos?type=owner&per_page=100" --paginate \
+              --jq '.[] | select(.fork==false and .archived==false) | .full_name'
+          done >> "$tmp"
+
+          # Filter by pattern, apply exclusions, sort unique
+          grep -E "${PATTERN}" "$tmp" \
+            | grep -F -x -v \
+                -e "$(cat template.repo)" \
+                -e "${{ github.repository }}" \
+            | sort -u > repos.list
+
+          # Ensure trailing newline even for empty file
+          if [ ! -s repos.list ] || [ -n "$(tail -c1 repos.list || true)" ]; then echo >> repos.list; fi
+
+          printf "Wrote %s repos to repos.list\n" "$(wc -l < repos.list)"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: refresh-repos-list
+          base: main
+          commit-message: "chore(repos): refresh repos.list"
+          title: "chore(repos): refresh repos.list"
+          body: Automated refresh of repos.list
+          add-paths: |
+            repos.list
+          signoff: true
+          delete-branch: true
