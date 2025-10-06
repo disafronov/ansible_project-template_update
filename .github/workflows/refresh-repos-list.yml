@@ -15,7 +15,7 @@ jobs:
     env:
       # Hard-coded input per agreed minimal design
       USERS: "disafronov"
-      PATTERN: "^disafronov/ansible_role-"
+      PATTERN: "^disafronov/ansible_project-"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
