@@ -15,19 +15,19 @@ jobs:
     env:
       # Hard-coded input per agreed minimal design
       USERS: "disafronov"
-      PATTERN: "^disafronov/ansible_project-"
+      PATTERN: "^disafronov/ansible_role-"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Verify template.repo
-        shell: bash
+        shell: sh
         run: |
-          if [[ ! -s template.repo ]]; then
+          if [ ! -s template.repo ]; then
             echo "template.repo not found or empty" >&2
             exit 1
           fi
-          if [[ $(wc -l < template.repo) -ne 1 ]]; then
+          if [ "$(wc -l < template.repo)" -ne 1 ]; then
             echo "template.repo must contain exactly one line" >&2
             exit 1
           fi
@@ -36,13 +36,13 @@ jobs:
         env:
           # Use PAT only for listing repositories (private access)
           GH_TOKEN: ${{ secrets.REPO_UPDATE_TOKEN }}
-        shell: bash
+        shell: sh
         run: |
-          set -euo pipefail
+          set -eu
 
           tmp="$(mktemp)"; : > "$tmp"
 
-          # Collect user's repositories (type=owner), private included via ROLE_UPDATE_TOKEN
+          # Collect user's repositories (type=owner), private included via REPO_UPDATE_TOKEN
           for user in $USERS; do
             gh api -H "Accept: application/vnd.github+json" \
               "/users/${user}/repos?type=owner&per_page=100" --paginate \
@@ -56,10 +56,11 @@ jobs:
                 -e "${{ github.repository }}" \
             | sort -u > repos.list
 
-          # Ensure trailing newline even for empty file
-          if [ ! -s repos.list ] || [ -n "$(tail -c1 repos.list || true)" ]; then echo >> repos.list; fi
-
-          printf "Wrote %s repos to repos.list\n" "$(wc -l < repos.list)"
+          # Fail if repos.list is empty (after excluding template and self repo)
+          if [ "$(wc -l < repos.list)" -eq 0 ]; then
+            echo "repos.list is empty (no repos matched [${PATTERN}] after excluding [$(cat template.repo)] and [${{ github.repository }}])" >&2
+            exit 1
+          fi
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6

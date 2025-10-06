@@ -20,26 +20,26 @@ jobs:
 
       - name: Verify required files exist and are valid
         id: verify
-        shell: bash
+        shell: sh
         run: |
-          if [[ ! -s template.repo ]]; then
+          if [ ! -s template.repo ]; then
             echo "template.repo not found or empty" >&2
             exit 1
           fi
-          if [[ $(wc -l < template.repo) -ne 1 ]]; then
+          if [ "$(wc -l < template.repo)" -ne 1 ]; then
             echo "template.repo must contain exactly one line" >&2
             exit 1
           fi
-          if [[ ! -s repos.list ]]; then
+          if [ ! -s repos.list ]; then
             echo "repos.list not found or empty" >&2
             exit 1
           fi
-          if [[ ! -s include.list ]]; then
+          if [ ! -s include.list ]; then
             echo "include.list not found or empty" >&2
             exit 1
           fi
-          if [[ -f delete.list ]]; then
-            if [[ ! -s delete.list ]]; then
+          if [ -f delete.list ]; then
+            if [ ! -s delete.list ]; then
               echo "delete.list is empty; deletion step will be skipped"
             fi
           else
@@ -48,6 +48,7 @@ jobs:
 
       - name: Read template repository
         id: template
+        shell: sh
         run: echo "template_repo=$(cat template.repo)" >> $GITHUB_OUTPUT
 
       - name: Checkout template repository
@@ -60,19 +61,19 @@ jobs:
 
       - name: Determine latest semver tag and checkout
         id: get-tag
-        shell: bash
+        shell: sh
         run: |
-          cd template
-          LATEST_TAG=$(git tag | grep -E '^v[0-9]+(\.[0-9]+){1,2}$' | sort -V | tail -n 1)
-          if [[ -z "$LATEST_TAG" ]]; then
-            echo "No semver tags found matching ^vX.Y[.Z]" >&2
+          # Strict SemVer (MAJOR.MINOR.PATCH) without pre-release/build
+          LATEST_TAG=$(git -C template tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No SemVer tags vMAJOR.MINOR.PATCH found" >&2
             exit 1
           fi
-          git checkout "$LATEST_TAG"
+          git -C template checkout "$LATEST_TAG"
           echo "template_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Remove template .git directory
-        shell: bash
+        shell: sh
         run: |
           rm -rf template/.git
 
@@ -87,20 +88,26 @@ jobs:
 
       - name: Build repos matrix from repos.list
         id: repos
-        shell: bash
+        shell: sh
         run: |
-          set -euo pipefail
-          mapfile -t LINES < <(
-            grep -vE '^[[:space:]]*(#|$)' repos.list \
-              | grep -F -v -x \
-                  -e "${{ steps.template.outputs.template_repo }}" \
-                  -e "${{ github.repository }}"
-          )
-          if [[ ${#LINES[@]} -eq 0 ]]; then
+          set -eu
+          tmp="$(mktemp)"; : > "$tmp"
+
+          # filter: drop comments/empty, exclude template and self
+          grep -vE '^[[:space:]]*(#|$)' repos.list \
+            | grep -F -v -x \
+                -e "${{ steps.template.outputs.template_repo }}" \
+                -e "${{ github.repository }}" \
+            > "$tmp" || true
+
+          # fail if empty after exclusions
+          if [ "$(wc -l < "$tmp")" -eq 0 ]; then
             echo "repos.list has no usable entries after exclusions" >&2
             exit 1
           fi
-          JSON_ARRAY=$(printf '%s\n' "${LINES[@]}" | jq -R . | jq -c -s .)
+
+          # build JSON array
+          JSON_ARRAY=$(jq -R . < "$tmp" | jq -c -s .)
           echo "repos_matrix=$JSON_ARRAY" >> "$GITHUB_OUTPUT"
 
   sync-repos:
@@ -128,7 +135,7 @@ jobs:
           token: ${{ secrets.REPO_UPDATE_TOKEN }}
 
       - name: Apply updates from template per include.list
-        shell: bash
+        shell: sh
         run: |
           rsync -av \
             --include-from=include.list \
@@ -138,16 +145,18 @@ jobs:
             repo/
 
       - name: Apply deletions per delete.list (if present)
-        if: hashFiles('delete.list') != ''
-        shell: bash
+        if: ${{ hashFiles('delete.list') != '' }}
+        shell: sh
         run: |
-          while IFS= read -r path || [[ -n "$path" ]]; do
-            [[ -z "$path" || "$path" =~ ^\s*# ]] && continue
-            rm -rfv "repo/$path" || true
+          set -eu
+          while IFS= read -r raw || [ -n "$raw" ]; do
+            path=$(printf '%s' "$raw" | sed 's/^[[:space:]]*//')
+            case "$path" in ''|'#'*) continue ;; esac
+            rm -rfv -- "repo/$path" || true
           done < delete.list
 
       - name: Commit and push changes
-        shell: bash
+        shell: sh
         env:
           TEMPLATE_TAG: ${{ needs.prepare-template.outputs.template_tag }}
         run: |
