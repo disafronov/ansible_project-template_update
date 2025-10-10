@@ -1,3 +1,5 @@
+.github/workflows/release.yaml
+.github/workflows/validate.yaml
 .github/dependabot.yaml
 .cliff.git.toml
 .cliff.release.toml
